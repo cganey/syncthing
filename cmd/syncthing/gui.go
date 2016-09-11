@@ -71,7 +71,7 @@ type modelIntf interface {
 	Completion(device protocol.DeviceID, folder string) model.FolderCompletion
 	Override(folder string)
 	NeedFolderFiles(folder string, page, perpage int) ([]db.FileInfoTruncated, []db.FileInfoTruncated, []db.FileInfoTruncated, int)
-	NeedSize(folder string) (nfiles int, bytes int64)
+	NeedSize(folder string) (nfiles, ndeletes int, bytes int64)
 	ConnectionStats() map[string]interface{}
 	DeviceStatistics() map[string]stats.DeviceStatistics
 	FolderStatistics() map[string]stats.FolderStatistics
@@ -313,6 +313,11 @@ func (s *apiService) Serve() {
 	// Add the CORS handling
 	handler = corsMiddleware(handler)
 
+	if addressIsLocalhost(guiCfg.Address()) && !guiCfg.InsecureSkipHostCheck {
+		// Verify source host
+		handler = localhostMiddleware(handler)
+	}
+
 	handler = debugMiddleware(handler)
 
 	srv := http.Server{
@@ -437,10 +442,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Process OPTIONS requests
 		if r.Method == "OPTIONS" {
+			// Add a generous access-control-allow-origin header for CORS requests
+			w.Header().Add("Access-Control-Allow-Origin", "*")
 			// Only GET/POST Methods are supported
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
-			// Only this custom header can be set
-			w.Header().Set("Access-Control-Allow-Headers", "X-API-Key")
+			// Only these headers can be set
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
 			// The request is meant to be cached 10 minutes
 			w.Header().Set("Access-Control-Max-Age", "600")
 
@@ -495,6 +502,17 @@ func withDetailsMiddleware(id protocol.DeviceID, h http.Handler) http.Handler {
 	})
 }
 
+func localhostMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if addressIsLocalhost(r.Host) {
+			h.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, "Host check error", http.StatusForbidden)
+	})
+}
+
 func (s *apiService) whenDebugging(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.GUI().Debugging {
@@ -503,7 +521,6 @@ func (s *apiService) whenDebugging(h http.Handler) http.Handler {
 		}
 
 		http.Error(w, "Debugging disabled", http.StatusBadRequest)
-		return
 	})
 }
 
@@ -588,6 +605,7 @@ func (s *apiService) getDBCompletion(w http.ResponseWriter, r *http.Request) {
 		"completion":  comp.CompletionPct,
 		"needBytes":   comp.NeedBytes,
 		"globalBytes": comp.GlobalBytes,
+		"needDeletes": comp.NeedDeletes,
 	})
 }
 
@@ -608,8 +626,8 @@ func folderSummary(cfg configIntf, m modelIntf, folder string) map[string]interf
 	localFiles, localDeleted, localBytes := m.LocalSize(folder)
 	res["localFiles"], res["localDeleted"], res["localBytes"] = localFiles, localDeleted, localBytes
 
-	needFiles, needBytes := m.NeedSize(folder)
-	res["needFiles"], res["needBytes"] = needFiles, needBytes
+	needFiles, needDeletes, needBytes := m.NeedSize(folder)
+	res["needFiles"], res["needDeletes"], res["needBytes"] = needFiles, needDeletes, needBytes
 
 	res["inSyncFiles"], res["inSyncBytes"] = globalFiles-needFiles, globalBytes-needBytes
 
@@ -1290,4 +1308,18 @@ func dirNames(dir string) []string {
 
 	sort.Strings(dirs)
 	return dirs
+}
+
+func addressIsLocalhost(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// There was no port, so we assume the address was just a hostname
+		host = addr
+	}
+	switch host {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	default:
+		return false
+	}
 }

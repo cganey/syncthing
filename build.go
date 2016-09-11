@@ -298,6 +298,9 @@ func runCommand(cmd string, target target) {
 			}
 		}
 
+	case "version":
+		fmt.Println(getVersion())
+
 	default:
 		log.Fatalf("Unknown command %q", cmd)
 	}
@@ -642,7 +645,9 @@ func ldflags() string {
 
 func rmr(paths ...string) {
 	for _, path := range paths {
-		log.Println("rm -r", path)
+		if debug {
+			log.Println("rm -r", path)
+		}
 		os.RemoveAll(path)
 	}
 }

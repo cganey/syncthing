@@ -7,13 +7,18 @@ package protocol
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/minio/sha256-simd"
+
 	"github.com/syncthing/syncthing/lib/rand"
+)
+
+const (
+	SyntheticDirectorySize = 128
 )
 
 var (
@@ -56,8 +61,11 @@ func (f FileInfo) HasPermissionBits() bool {
 }
 
 func (f FileInfo) FileSize() int64 {
-	if f.IsDirectory() || f.IsDeleted() {
-		return 128
+	if f.Deleted {
+		return 0
+	}
+	if f.IsDirectory() {
+		return SyntheticDirectorySize
 	}
 	return f.Size
 }
